@@ -192,15 +192,17 @@ def get_recent_items(feed_url: str, timeout: int) -> list[dict]:
         if MAX_PER_SITE and len(recent) >= MAX_PER_SITE:
             break
 
-        if getattr(e, "published_parsed", None):
-            published = datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
-        elif getattr(e, "published", None):
-            try:
-                published = dtparser.parse(e.published).astimezone(timezone.utc)
-            except Exception:
-                published = datetime.now(timezone.utc)
-        else:
-            published = datetime.now(timezone.utc)
+        # ─── replace the entire old if/elif/else block with this: ───
+        try:
+            published = (
+                datetime(*e.published_parsed[:6], tzinfo=timezone.utc)
+                if getattr(e, "published_parsed", None)
+                else dtparser.parse(e.published).astimezone(timezone.utc)
+            )
+        except Exception:
+            # bad or missing date → skip this entry
+            continue
+        # ─────────────────────────────────────────────────────────────
 
         if published < cutoff:
             continue
@@ -226,8 +228,14 @@ def collect_items(
     timeout: int,
     discover: bool,
     cache: dict[str, dict],
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
+    """
+    Return:
+        items         – flat list of recent entries (may be > len(sites))
+        failed_hosts  – list of sources that produced NO usable entry
+    """
     all_items: list[dict] = []
+    failed_hosts: list[str] = []          #  ← NEW
 
     def process(line: str) -> list[dict] | None:
         url = normalize_url(line)
@@ -238,7 +246,9 @@ def collect_items(
         feed_url = OVERRIDES.get(host)
 
         if not feed_url:
-            looks_like = any(url.endswith(ext) for ext in (".rss", ".xml", "/feed", "/rss", "/atom.xml"))
+            looks_like = any(
+                url.endswith(ext) for ext in (".rss", ".xml", "/feed", "/rss", "/atom.xml")
+            )
             if looks_like:
                 feed_url = url
             elif discover:
@@ -252,7 +262,7 @@ def collect_items(
                 if fresh:
                     for itm in fresh:
                         itm["source"] = friendly_name(url)
-                    cache[_key(feed_url)] = fresh[0]
+                    cache[_key(feed_url)] = fresh[0]          # store newest in cache
                     log.info(
                         "✔ %s – %s%s",
                         friendly_name(url),
@@ -263,10 +273,14 @@ def collect_items(
         except Exception as exc:
             log.debug("%s – %s", feed_url, exc)
 
+        # fall-back to cached single item
         stale = cache.get(_key(feed_url))
         if stale:
             log.info("⚠ using cached entry for %s", friendly_name(url))
             return [stale]
+
+        # complete failure → remember host
+        failed_hosts.append(friendly_name(url))               #  ← NEW
         return None
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -279,7 +293,8 @@ def collect_items(
             except Exception as exc:
                 log.warning("processing %s failed: %s", futures[fut], exc)
 
-    return all_items
+    return all_items, failed_hosts                            #  ← NEW signature
+
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +303,7 @@ def collect_items(
 def build_feed(items: list[dict], output: Path):
     fg = FeedGenerator()
     fg.title("State-Policy Think-Tank Digest")
-    fg.link(href="https://<replace-with-your-domain>/rss.xml", rel="self")
+    fg.link(href="https://ndejongspn.github.io/RSS_Affiliate/rss.xml", rel="self")
     fg.description("Latest posts from free-market policy institutes across the U.S.")
     fg.language("en")
 
@@ -337,29 +352,35 @@ def main(argv: List[str] | None = None):
 
     cache = load_cache()
 
-    items = collect_items(
+    # ------------------- CALL UPDATED COLLECTOR ----------------------------
+    items, failed_hosts = collect_items(
         sites,
         workers=args.workers,
         timeout=args.timeout,
         discover=args.discover,
         cache=cache,
     )
+    # ----------------------------------------------------------------------
 
-    # ------------------------------------------------------------------ #
-    #  🛡️  Filter out any entries missing a valid published datetime
-    # ------------------------------------------------------------------ #
+    # throw away any entry that somehow lacks a proper datetime
     items = [i for i in items if isinstance(i.get("published"), datetime)]
 
     save_cache(cache)
 
     fresh   = sum(1 for i in items if _key(i["link"]) not in cache)
     cached  = len(items) - fresh
-    failed  = len(sites) - len(items)
+    failed  = len(failed_hosts)                                #  ← NEW
 
     build_feed(items, Path(args.output))
 
-    log.info("run complete → fresh: %d | cached: %d | failed: %d",
-             fresh, cached, failed)
+    log.info(
+        "run complete → fresh: %d | cached: %d | failed: %d",
+        fresh, cached, failed,
+    )
+
+    if failed_hosts:                                           #  ← NEW
+        log.info("Feeds with no usable items: %s",
+                 ", ".join(sorted(set(failed_hosts))))
 
 
 if __name__ == "__main__":
