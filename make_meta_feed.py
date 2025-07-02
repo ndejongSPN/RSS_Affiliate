@@ -37,8 +37,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential  # type: ignore
 DEFAULT_WORKERS  = 16
 DEFAULT_TIMEOUT  = 10
 USER_AGENT       = (
-    "MetaFeedBot/1.3 (+https://github.com/<your-repo>;"
-    " feed-contact@example.com)"
+    "MetaFeedBot/1.3 (+https://ndejongspn.github.io/RSS_Affiliate/rss.xml;"
+    " ndejong@spn.org.com)"
 )
 CACHE_FILE       = ".meta_feed_cache.json"
 OVERRIDES_FILE   = "overrides.ini"
