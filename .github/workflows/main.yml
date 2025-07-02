@@ -1,0 +1,88 @@
+# .github/workflows/meta-feed.yml
+name: Build & publish combined RSS
+
+###############################################################################
+# 1️⃣  WHEN DOES IT RUN?
+###############################################################################
+on:
+  schedule:          # every hour at minute 0 (cron times are in UTC)
+    - cron: '0 * * * *'
+  workflow_dispatch: # manual “Run workflow” button in the Actions tab
+
+###############################################################################
+# 2️⃣  ONE JOB, LINUX RUNNER
+###############################################################################
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # never let a stuck job run forever
+    timeout-minutes: 15
+
+    # only one copy of this workflow at a time
+    concurrency:
+      group: meta-feed
+      cancel-in-progress: true
+
+    steps:
+###############################################################################
+# 3️⃣  CHECK OUT REPO
+###############################################################################
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0   # allow us to commit back to main
+
+###############################################################################
+# 4️⃣  SET UP PYTHON (cached)
+###############################################################################
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Cache pip
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: ${{ runner.os }}-pip-
+
+    - name: Install requirements
+      run: |
+        python -m pip install -U pip
+        pip install -r requirements.txt
+
+###############################################################################
+# 5️⃣  RUN THE SCRIPT
+###############################################################################
+    - name: Build rss.xml
+      run: |
+        python make_meta_feed.py \
+          -i feed.txt \
+          -o rss.xml \
+          --workers 24 \
+          --timeout 20 \
+          --discover
+
+###############################################################################
+# 6️⃣  COMMIT + PUSH CHANGES (only if rss.xml really changed)
+###############################################################################
+    - name: Commit & push
+      uses: EndBug/add-and-commit@v9
+      with:
+        add: 'rss.xml .meta_feed_cache.json'
+        message: 'hourly meta-feed update'
+        default_author: github_actions
+        push: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+###############################################################################
+# 7️⃣  OPTIONAL: KEEP A COPY OF THE LATEST RSS AS AN ARTIFACT
+###############################################################################
+    - name: Upload rss.xml artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: latest-rss
+        path: rss.xml
+        retention-days: 5
