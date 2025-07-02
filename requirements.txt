@@ -1,0 +1,6 @@
+feedparser
+feedgen
+beautifulsoup4
+python-dateutil
+requests
+tenacity
